@@ -16,13 +16,11 @@ class MNISTNet(nn.Module):
     def forward(self, x):
         # Flatten image from 28x28 to 784
         x = x.view(-1, 784)
-        
         # Hidden layers with ReLU activation
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
         x = F.relu(self.fc2(x))
         x = self.dropout(x)
-        
         # Output layer (no activation, we'll use CrossEntropyLoss)
         x = self.fc3(x)
         return x
@@ -49,9 +47,10 @@ class MNISTConvNet(nn.Module):
         # Conv layers
         x = self.pool(F.relu(self.conv1(x)))  # 28x28 -> 14x14
         x = self.pool(F.relu(self.conv2(x)))  # 14x14 -> 7x7
-        
+    
         # Flatten for FC layers
         x = x.view(-1, 64 * 7 * 7)
+        
         
         # FC layers
         x = F.relu(self.fc1(x))

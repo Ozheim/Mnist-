@@ -25,18 +25,16 @@ def parse_images(filename):
        images = images.reshape(count, height, width)
        
        return images
-
+   
 def load_mnist_data(data_dir):
    """Load MNIST data from data/ folder"""
    train_images_path = os.path.join(data_dir, 'train-images.idx3-ubyte')
    train_labels_path = os.path.join(data_dir, 'train-labels.idx1-ubyte')
    test_images_path = os.path.join(data_dir, 't10k-images.idx3-ubyte')
    test_labels_path = os.path.join(data_dir, 't10k-labels.idx1-ubyte')
-   
    # Load test data
    test_labels = parse_labels(test_labels_path) if os.path.exists(test_labels_path) else None
    test_images = parse_images(test_images_path) if os.path.exists(test_images_path) else None
-   
    # Load train data
    train_labels = parse_labels(train_labels_path) if os.path.exists(train_labels_path) else None
    train_images = parse_images(train_images_path) if os.path.exists(train_images_path) else None
