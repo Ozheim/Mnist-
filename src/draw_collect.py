@@ -1,426 +1,264 @@
-import tkinter as tk
-from tkinter import ttk, simpledialog, messagebox
+import tkinter as tk, os, time, sys, subprocess
+from tkinter import messagebox
 import numpy as np
 from PIL import Image, ImageDraw
 import torch
-import sys
-import os
-import time
 
-# Ajouter le dossier src au path
 sys.path.append('src')
 from model import get_model
 
-class MNISTCollectApp:
+class MNISTApp:
     def __init__(self):
+        # Setup window
         self.root = tk.Tk()
-        self.root.title("MNIST with Feedback Learning")
-        self.root.geometry("500x800")
+        self.root.title("MNIST Feedback Learning")
+        self.root.geometry("500x750")
         
         # Variables
-        self.canvas_size = 280
-        self.brush_size = 12  # Plus petit pour mieux ressembler à MNIST
+        self.canvas_size, self.brush_size = 280, 12
         self.drawing = False
+        self.saved_count = self.corrections_count = 0
+        self.current_prediction = self.current_confidence = None
         
-        # Feedback tracking
-        self.corrections_count = 0
-        self.current_prediction = None
-        self.current_confidence = None
+        # Create folders and load model
+        self.data_dir = "mes_donnees"
+        os.makedirs(self.data_dir, exist_ok=True)
+        for i in range(10):
+            os.makedirs(f"{self.data_dir}/{i}", exist_ok=True)
         
-        # Counter for saved images (BEFORE setup_ui!)
-        self.saved_count = 0
+        self.model = get_model("simple")
+        try:
+            self.model.load_state_dict(torch.load('personal_mnist_model.pth'))
+            self.model.eval()
+            print("✅ Personal model loaded")
+        except:
+            self.model = None
+            print("❌ No personal model found")
         
-        # Create data collection folders
-        self.create_data_folders()
-        
-        # Load trained model (priorité au modèle personnel)
-        self.model = None
-        self.load_model()
-        
-        # Create UI
-        self.setup_ui()
-        
-        # Canvas for PIL drawing
+        # Canvas setup
         self.pil_image = Image.new('L', (self.canvas_size, self.canvas_size), 0)
         self.pil_draw = ImageDraw.Draw(self.pil_image)
         
-    def create_data_folders(self):
-        """Create folders for data collection"""
-        self.data_dir = "mes_donnees"
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
-            
-        # Create folders for each digit
-        for i in range(10):
-            digit_folder = os.path.join(self.data_dir, str(i))
-            if not os.path.exists(digit_folder):
-                os.makedirs(digit_folder)
-                
-        print(f"Data collection folders created in: {self.data_dir}")
-        
-    def load_model(self):
-        """Load the trained MNIST model (personal model ONLY)"""
-        model_paths = [
-            'personal_mnist_model.pth',  # Modèle personnel uniquement
-        ]
-        
-        self.model = get_model("simple")
-        
-        for path in model_paths:
-            try:
-                if os.path.exists(path):
-                    self.model.load_state_dict(torch.load(path))
-                    self.model.eval()
-                    print(f"Personal model loaded successfully from: {path}")
-                    return
-            except Exception as e:
-                print(f"Failed to load from {path}: {e}")
-        
-        print("Could not load personal model!")
-        self.model = None
+        self.setup_ui()
     
     def setup_ui(self):
-        """Create the user interface"""
         # Title
-        title_label = tk.Label(self.root, text="MNIST with Feedback Learning", 
-                              font=("Arial", 16, "bold"))
-        title_label.pack(pady=10)
+        tk.Label(self.root, text="MNIST Feedback Learning", font=("Arial", 16, "bold")).pack(pady=10)
         
-        # Drawing canvas
-        self.canvas = tk.Canvas(self.root, width=self.canvas_size, 
-                               height=self.canvas_size, bg='black', 
-                               cursor="pencil")
+        # Canvas
+        self.canvas = tk.Canvas(self.root, width=self.canvas_size, height=self.canvas_size, 
+                               bg='black', cursor="pencil")
         self.canvas.pack(pady=10)
-        
-        # Bind mouse events
         self.canvas.bind("<Button-1>", self.start_draw)
         self.canvas.bind("<B1-Motion>", self.draw)
         self.canvas.bind("<ButtonRelease-1>", self.stop_draw)
         
-        # Buttons frame 1
-        button_frame1 = tk.Frame(self.root)
-        button_frame1.pack(pady=5)
+        # Main buttons
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(pady=5)
         
-        # Predict button
-        self.predict_btn = tk.Button(button_frame1, text="Predict", 
-                                    command=self.predict_digit,
-                                    font=("Arial", 12, "bold"),
-                                    bg="blue", fg="white",
-                                    width=10)
-        self.predict_btn.pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Predict", command=self.predict, 
+                 bg="blue", fg="white", width=10, font=("Arial", 12, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Clear", command=self.clear, 
+                 bg="red", fg="white", width=10, font=("Arial", 12, "bold")).pack(side=tk.LEFT, padx=5)
         
-        # Clear button
-        self.clear_btn = tk.Button(button_frame1, text="Clear", 
-                                  command=self.clear_canvas,
-                                  font=("Arial", 12, "bold"),
-                                  bg="red", fg="white",
-                                  width=10)
-        self.clear_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Result frame
-        result_frame = tk.Frame(self.root)
-        result_frame.pack(pady=10)
-        
-        # Prediction result
-        self.result_label = tk.Label(result_frame, text="Draw a digit and click Predict", 
-                                    font=("Arial", 14))
-        self.result_label.pack()
-        
-        # Confidence
-        self.confidence_label = tk.Label(result_frame, text="", 
-                                        font=("Arial", 12))
+        # Results
+        self.result_label = tk.Label(self.root, text="Draw a digit and click Predict", font=("Arial", 14))
+        self.result_label.pack(pady=5)
+        self.confidence_label = tk.Label(self.root, text="", font=("Arial", 12))
         self.confidence_label.pack()
         
-        # FEEDBACK SECTION (NEW!)
-        feedback_frame = tk.LabelFrame(self.root, text="Feedback", 
-                                      font=("Arial", 12, "bold"))
+        # Feedback section
+        feedback_frame = tk.LabelFrame(self.root, text="Feedback", font=("Arial", 12, "bold"))
         feedback_frame.pack(pady=15, padx=20, fill="x")
         
-        # Feedback buttons
-        feedback_buttons_frame = tk.Frame(feedback_frame)
-        feedback_buttons_frame.pack(pady=10)
+        fb_btn_frame = tk.Frame(feedback_frame)
+        fb_btn_frame.pack(pady=10)
         
-        self.correct_btn = tk.Button(feedback_buttons_frame, text="✅ Correct", 
-                                    command=self.mark_correct,
-                                    font=("Arial", 11, "bold"),
-                                    bg="green", fg="white",
-                                    width=12, state="disabled")
+        self.correct_btn = tk.Button(fb_btn_frame, text="✅ Correct", command=self.mark_correct,
+                                    bg="green", fg="white", width=12, state="disabled")
         self.correct_btn.pack(side=tk.LEFT, padx=5)
         
-        self.wrong_btn = tk.Button(feedback_buttons_frame, text="❌ Wrong", 
-                                  command=self.mark_wrong,
-                                  font=("Arial", 11, "bold"),
-                                  bg="orange", fg="white",
-                                  width=12, state="disabled")
+        self.wrong_btn = tk.Button(fb_btn_frame, text="❌ Wrong", command=self.mark_wrong,
+                                  bg="orange", fg="white", width=12, state="disabled")
         self.wrong_btn.pack(side=tk.LEFT, padx=5)
         
-        # Correction buttons (0-9)
-        tk.Label(feedback_frame, text="If wrong, click the correct digit:", 
-                font=("Arial", 10)).pack(pady=(10,5))
-        
+        # Correction buttons
+        tk.Label(feedback_frame, text="If wrong, click correct digit:").pack(pady=(10,5))
         correction_frame = tk.Frame(feedback_frame)
         correction_frame.pack()
         
         self.correction_buttons = []
         for i in range(10):
             btn = tk.Button(correction_frame, text=str(i), 
-                           command=lambda digit=i: self.correct_to(digit),
-                           font=("Arial", 10), width=3, height=1,
-                           state="disabled")
+                           command=lambda d=i: self.correct_to(d),
+                           width=3, height=1, state="disabled")
             btn.pack(side=tk.LEFT, padx=2)
             self.correction_buttons.append(btn)
         
-        # Quick save buttons frame
-        quick_frame = tk.LabelFrame(self.root, text="Quick Save (no prediction needed)")
-        quick_frame.pack(pady=10, padx=20, fill="x")
-
-        tk.Label(quick_frame, text="Draw and save directly:", font=("Arial", 10)).pack()
+        # Quick save
+        save_frame = tk.LabelFrame(self.root, text="Quick Save")
+        save_frame.pack(pady=10, padx=20, fill="x")
         
-        # Quick save buttons (0-9)
-        buttons_frame = tk.Frame(quick_frame)
-        buttons_frame.pack(pady=5)
-        
+        save_btn_frame = tk.Frame(save_frame)
+        save_btn_frame.pack(pady=5)
         for i in range(10):
-            btn = tk.Button(buttons_frame, text=str(i), 
-                           command=lambda digit=i: self.quick_save(digit),
-                           font=("Arial", 10), width=3, height=1)
-            btn.pack(side=tk.LEFT, padx=2)
+            tk.Button(save_btn_frame, text=str(i), command=lambda d=i: self.quick_save(d),
+                     width=3, height=1).pack(side=tk.LEFT, padx=2)
         
-        # Collection stats
+        # Stats
         stats_frame = tk.Frame(self.root)
         stats_frame.pack(pady=10)
         
-        self.stats_label = tk.Label(stats_frame, text=f"Images saved: {self.saved_count}", 
-                                   font=("Arial", 10))
+        self.stats_label = tk.Label(stats_frame, text=f"Images: {self.saved_count}")
         self.stats_label.pack()
-        
-        self.corrections_label = tk.Label(stats_frame, text=f"Corrections: {self.corrections_count}", 
-                                         font=("Arial", 10), fg="blue")
+        self.corrections_label = tk.Label(stats_frame, text=f"Corrections: {self.corrections_count}", fg="blue")
         self.corrections_label.pack()
         
-        # Re-train button (appears when enough corrections)
-        self.retrain_btn = tk.Button(stats_frame, text="🔄 Re-train Model", 
-                                    command=self.retrain_model,
-                                    font=("Arial", 10, "bold"),
-                                    bg="purple", fg="white",
-                                    state="disabled")
+        self.retrain_btn = tk.Button(stats_frame, text="🔄 Re-train", command=self.retrain,
+                                    bg="purple", fg="white", state="disabled")
         self.retrain_btn.pack(pady=5)
         
         # Status
-        self.status_label = tk.Label(self.root, 
-                                    text="Personal model loaded" if self.model else "Personal model not loaded", 
-                                    font=("Arial", 10),
-                                    fg="green" if self.model else "red")
-        self.status_label.pack(side=tk.BOTTOM, pady=5)
+        status_text = "Personal model loaded" if self.model else "No model loaded"
+        color = "green" if self.model else "red"
+        tk.Label(self.root, text=status_text, fg=color).pack(side=tk.BOTTOM, pady=5)
     
-    def start_draw(self, event):
-        """Start drawing"""
-        self.drawing = True
-        
-    def draw(self, event):
-        """Draw on canvas"""
+    def start_draw(self, e): self.drawing = True
+    def stop_draw(self, e): self.drawing = False
+    
+    def draw(self, e):
         if self.drawing:
-            x, y = event.x, event.y
-            # Draw on tkinter canvas (visual)
-            self.canvas.create_oval(x - self.brush_size//2, y - self.brush_size//2,
-                                   x + self.brush_size//2, y + self.brush_size//2,
-                                   fill='white', outline='white')
-            
-            # Draw on PIL image (for prediction and saving)
-            self.pil_draw.ellipse([x - self.brush_size//2, y - self.brush_size//2,
-                                  x + self.brush_size//2, y + self.brush_size//2],
-                                 fill=255)
+            x, y = e.x, e.y
+            r = self.brush_size // 2
+            self.canvas.create_oval(x-r, y-r, x+r, y+r, fill='white', outline='white')
+            self.pil_draw.ellipse([x-r, y-r, x+r, y+r], fill=255)
     
-    def stop_draw(self, event):
-        """Stop drawing"""
-        self.drawing = False
-    
-    def clear_canvas(self):
-        """Clear the drawing canvas"""
+    def clear(self):
         self.canvas.delete("all")
         self.pil_image = Image.new('L', (self.canvas_size, self.canvas_size), 0)
         self.pil_draw = ImageDraw.Draw(self.pil_image)
         self.result_label.config(text="Draw a digit and click Predict")
         self.confidence_label.config(text="")
-        self.disable_feedback_buttons()
+        self.disable_feedback()
     
-    def predict_digit(self):
-        """Predict the drawn digit"""
+    def predict(self):
         if not self.model:
-            self.result_label.config(text="Personal model not loaded!", fg="red")
+            self.result_label.config(text="No model loaded!", fg="red")
             return
         
-        if self.is_canvas_empty():
-            self.result_label.config(text="Please draw something first!", fg="orange")
+        if np.array(self.pil_image).max() == 0:
+            self.result_label.config(text="Draw something first!", fg="orange")
             return
         
         try:
-            # Resize image to 28x28
-            img_resized = self.pil_image.resize((28, 28), Image.LANCZOS)
+            img = self.pil_image.resize((28, 28), Image.LANCZOS)
+            tensor = torch.from_numpy(np.array(img, dtype=np.float32) / 255.0).unsqueeze(0)
             
-            # Convert to numpy array and normalize
-            img_array = np.array(img_resized, dtype=np.float32) / 255.0
-            
-            # Convert to tensor and add batch dimension
-            img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-            
-            # Make prediction
             with torch.no_grad():
-                output = self.model(img_tensor)
-                probabilities = torch.softmax(output, dim=1)
-                predicted_digit = torch.argmax(output, dim=1).item()
-                confidence = probabilities[0][predicted_digit].item() * 100
+                output = self.model(tensor)
+                probs = torch.softmax(output, dim=1)
+                pred = torch.argmax(output, dim=1).item()
+                conf = probs[0][pred].item() * 100
             
-            # Store prediction for feedback
-            self.current_prediction = predicted_digit
-            self.current_confidence = confidence
+            self.current_prediction = pred
+            self.current_confidence = conf
             
-            # Display result
-            self.result_label.config(text=f"Predicted digit: {predicted_digit}", 
-                                    fg="blue", font=("Arial", 16, "bold"))
-            self.confidence_label.config(text=f"Confidence: {confidence:.1f}%", 
-                                        fg="green" if confidence > 90 else "orange")
-            
-            # Enable feedback buttons
-            self.enable_feedback_buttons()
+            self.result_label.config(text=f"Predicted: {pred}", fg="blue", font=("Arial", 16, "bold"))
+            self.confidence_label.config(text=f"Confidence: {conf:.1f}%", 
+                                        fg="green" if conf > 90 else "orange")
+            self.enable_feedback()
             
         except Exception as e:
-            self.result_label.config(text=f"Prediction error: {str(e)}", fg="red")
+            self.result_label.config(text=f"Error: {str(e)}", fg="red")
     
-    def enable_feedback_buttons(self):
-        """Enable feedback buttons after prediction"""
+    def enable_feedback(self):
         self.correct_btn.config(state="normal")
         self.wrong_btn.config(state="normal")
         for btn in self.correction_buttons:
             btn.config(state="normal")
     
-    def disable_feedback_buttons(self):
-        """Disable feedback buttons"""
+    def disable_feedback(self):
         self.correct_btn.config(state="disabled")
         self.wrong_btn.config(state="disabled")
         for btn in self.correction_buttons:
             btn.config(state="disabled")
     
     def mark_correct(self):
-        """Mark prediction as correct and save"""
         if self.current_prediction is not None:
             self.save_image(self.current_prediction)
-            self.result_label.config(text=f"✅ Correct! Saved as {self.current_prediction}", fg="green")
-            self.disable_feedback_buttons()
+            self.result_label.config(text=f"✅ Saved as {self.current_prediction}", fg="green")
+            self.disable_feedback()
     
     def mark_wrong(self):
-        """Mark prediction as wrong"""
-        self.result_label.config(text="❌ Wrong! Click the correct digit below:", fg="red")
-        self.wrong_btn.config(state="disabled")
+        self.result_label.config(text="❌ Click correct digit below:", fg="red")
         self.correct_btn.config(state="disabled")
+        self.wrong_btn.config(state="disabled")
     
-    def correct_to(self, correct_digit):
-        """Correct prediction to the right digit"""
+    def correct_to(self, digit):
         if self.current_prediction is not None:
-            self.save_image(correct_digit)
+            self.save_image(digit)
             self.corrections_count += 1
             self.corrections_label.config(text=f"Corrections: {self.corrections_count}")
             
-            # Show correction feedback
-            self.result_label.config(text=f"✅ Corrected! Was {self.current_prediction}, now saved as {correct_digit}", 
-                                    fg="green")
+            self.result_label.config(text=f"✅ Was {self.current_prediction}, saved as {digit}", fg="green")
             
-            # Check if we should enable retrain button
-            if self.corrections_count >= 1:  # After 1 correction (pour test)
+            if self.corrections_count >= 1:
                 self.retrain_btn.config(state="normal")
             
-            self.disable_feedback_buttons()
+            self.disable_feedback()
     
-    def retrain_model(self):
-        """Launch retraining process"""
-        result = messagebox.askyesno("Re-train Model", 
-                                    f"You have {self.corrections_count} corrections.\n"
-                                    f"Do you want to re-train the model with new data?\n"
-                                    f"This may take a few minutes...")
+    def quick_save(self, digit):
+        if np.array(self.pil_image).max() == 0:
+            messagebox.showwarning("Warning", "Draw something first!")
+            return
         
-        if result:
-            self.result_label.config(text="🔄 Re-training model...", fg="blue")
+        self.save_image(digit)
+        self.result_label.config(text=f"Saved as {digit}!", fg="green")
+    
+    def save_image(self, digit):
+        try:
+            img = self.pil_image.resize((28, 28), Image.LANCZOS)
+            filename = f"digit_{digit}_{int(time.time() * 1000)}.png"
+            img.save(f"{self.data_dir}/{digit}/{filename}")
+            
+            self.saved_count += 1
+            self.stats_label.config(text=f"Images: {self.saved_count}")
+            print(f"Saved: {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Save failed: {e}")
+    
+    def retrain(self):
+        if messagebox.askyesno("Re-train", f"Re-train with {self.corrections_count} corrections?"):
+            self.result_label.config(text="🔄 Training...", fg="blue")
             self.retrain_btn.config(state="disabled", text="Training...")
             self.root.update()
             
             try:
-                # Launch retrain script
-                import subprocess
-                result = subprocess.run(['python', 'retrain.py'], 
-                                      capture_output=True, text=True)
+                result = subprocess.run(['python', 'retrain.py'], capture_output=True)
                 
                 if result.returncode == 0:
-                    # Reload the new model
-                    self.load_model()
-                    self.result_label.config(text="✅ Model re-trained successfully!", fg="green")
-                    self.corrections_count = 0  # Reset counter
-                    self.corrections_label.config(text=f"Corrections: {self.corrections_count}")
-                    self.retrain_btn.config(state="disabled")  # Disable again
+                    # Reload model
+                    try:
+                        self.model.load_state_dict(torch.load('personal_mnist_model.pth'))
+                        self.result_label.config(text="✅ Re-training successful!", fg="green")
+                        self.corrections_count = 0
+                        self.corrections_label.config(text="Corrections: 0")
+                        self.retrain_btn.config(state="disabled")
+                    except:
+                        self.result_label.config(text="❌ Failed to reload model", fg="red")
                 else:
-                    self.result_label.config(text="❌ Re-training failed", fg="red")
+                    self.result_label.config(text="❌ Training failed", fg="red")
                     
             except Exception as e:
-                self.result_label.config(text=f"❌ Re-training error: {str(e)}", fg="red")
+                self.result_label.config(text=f"❌ Error: {e}", fg="red")
             
-            self.retrain_btn.config(text="🔄 Re-train Model")
-    
-    def quick_save(self, digit):
-        """Quick save with predetermined digit"""
-        if self.is_canvas_empty():
-            messagebox.showwarning("Warning", "Please draw something first!")
-            return
-        
-        self.save_image(digit)
-        self.result_label.config(text=f"Saved as digit {digit}!", fg="green")
-    
-    def save_image(self, digit):
-        """Save image to the appropriate folder"""
-        try:
-            # Resize image to 28x28 (same as MNIST)
-            img_resized = self.pil_image.resize((28, 28), Image.LANCZOS)
-            
-            # Create filename with timestamp
-            timestamp = int(time.time() * 1000)  # milliseconds
-            filename = f"digit_{digit}_{timestamp}.png"
-            filepath = os.path.join(self.data_dir, str(digit), filename)
-            
-            # Save image
-            img_resized.save(filepath)
-            
-            # Update counter and stats
-            self.saved_count += 1
-            self.stats_label.config(text=f"Images saved: {self.saved_count}")
-            
-            print(f"Saved image: {filepath}")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save image: {str(e)}")
-    
-    def is_canvas_empty(self):
-        """Check if canvas is empty"""
-        img_array = np.array(self.pil_image)
-        return img_array.max() == 0
+            self.retrain_btn.config(text="🔄 Re-train")
     
     def run(self):
-        """Start the application"""
         self.root.mainloop()
 
-def main():
-    """Main function"""
-    print("Starting MNIST Feedback Learning Application...")
-    print("Instructions:")
-    print("1. Draw a digit (0-9) on the black canvas")
-    print("2. Click 'Predict' to see the prediction")
-    print("3. Give feedback:")
-    print("   - Click '✅ Correct' if prediction is right")
-    print("   - Click '❌ Wrong' then the correct digit if wrong")
-    print("4. After 1+ corrections, you can re-train the model!")
-    print("5. Use quick save buttons for direct saving")
-    print("6. Use 'Clear' to start over")
-    print()
-    
-    app = MNISTCollectApp()
-    app.run()
-
 if __name__ == "__main__":
-    main()
+    print("MNIST Feedback Learning - Compact Version")
+    print("Draw → Predict → Feedback → Re-train!")
+    MNISTApp().run()
